@@ -6,6 +6,7 @@ dependencies:
   - nvidia::cudatoolkit=11.7
   - anaconda::pip
   - pip:
+    - setuptools==65.5.0
     - cython==0.29.33
     - mujoco==2.3.2
     - mujoco-py==2.1.2.14
