@@ -1,10 +1,11 @@
-from collections import deque, defaultdict
+from collections import deque, defaultdict, OrderedDict
 from typing import Any, NamedTuple
 import dm_env
 import numpy as np
 import torch
 from dm_env import StepType, specs
 import gym
+import gymnasium
 import warnings
 import yaml
 
@@ -61,7 +62,7 @@ class ActionRepeatWrapper(dm_env.Environment):
 
 
 class FrameStackWrapper(dm_env.Environment):
-    def __init__(self, env, num_frames, pixels_key='pixels'):
+    def __init__(self, env, num_frames, pixels_key="pixels"):
         self._env = env
         self._num_frames = num_frames
         self._frames = deque([], maxlen=num_frames)
@@ -73,12 +74,15 @@ class FrameStackWrapper(dm_env.Environment):
         pixels_shape = wrapped_obs_spec[pixels_key].shape
         if len(pixels_shape) == 4:
             pixels_shape = pixels_shape[1:]
-        self._obs_spec = specs.BoundedArray(shape=np.concatenate(
-            [[pixels_shape[2] * num_frames], pixels_shape[:2]], axis=0),
+        self._obs_spec = specs.BoundedArray(
+            shape=np.concatenate(
+                [[pixels_shape[2] * num_frames], pixels_shape[:2]], axis=0
+            ),
             dtype=np.uint8,
             minimum=0,
             maximum=255,
-            name='observation')
+            name="observation",
+        )
 
     def _transform_observation(self, time_step):
         assert len(self._frames) == self._num_frames
@@ -118,11 +122,13 @@ class ActionDTypeWrapper(dm_env.Environment):
     def __init__(self, env, dtype):
         self._env = env
         wrapped_action_spec = env.action_spec()
-        self._action_spec = specs.BoundedArray(wrapped_action_spec.shape,
-                                               dtype,
-                                               wrapped_action_spec.minimum,
-                                               wrapped_action_spec.maximum,
-                                               'action')
+        self._action_spec = specs.BoundedArray(
+            wrapped_action_spec.shape,
+            dtype,
+            wrapped_action_spec.minimum,
+            wrapped_action_spec.maximum,
+            "action",
+        )
 
     def step(self, action):
         action = action.astype(self._env.action_spec().dtype)
@@ -157,11 +163,13 @@ class ExtendedTimeStepWrapper(dm_env.Environment):
         if action is None:
             action_spec = self.action_spec()
             action = np.zeros(action_spec.shape, dtype=action_spec.dtype)
-        return ExtendedTimeStep(observation=time_step.observation,
-                                step_type=time_step.step_type,
-                                action=action,
-                                reward=time_step.reward or 0.0,
-                                discount=time_step.discount or 1.0)
+        return ExtendedTimeStep(
+            observation=time_step.observation,
+            step_type=time_step.step_type,
+            action=action,
+            reward=time_step.reward or 0.0,
+            discount=time_step.discount or 1.0,
+        )
 
     def observation_spec(self):
         return self._env.observation_spec()
@@ -177,7 +185,7 @@ class TimeStepToGymWrapper(object):
     def __init__(self, env, domain, task, action_repeat, modality):
         try:  # pixels
             obs_shp = env.observation_spec().shape
-            assert modality == 'pixels'
+            assert modality == "pixels"
         except:  # state
             obs_shp = []
             for v in env.observation_spec().values():
@@ -187,18 +195,20 @@ class TimeStepToGymWrapper(object):
                     shp = 1
                 obs_shp.append(shp)
             obs_shp = (np.sum(obs_shp, dtype=np.int32),)
-            assert modality != 'pixels'
+            assert modality != "pixels"
         act_shp = env.action_spec().shape
-        obs_dtype = np.float32 if modality != 'pixels' else np.uint8
+        obs_dtype = np.float32 if modality != "pixels" else np.uint8
         self.observation_space = gym.spaces.Box(
             low=np.full(
                 obs_shp,
-                -np.inf if modality != 'pixels' else env.observation_spec().minimum,
-                dtype=obs_dtype),
+                -np.inf if modality != "pixels" else env.observation_spec().minimum,
+                dtype=obs_dtype,
+            ),
             high=np.full(
                 obs_shp,
-                np.inf if modality != 'pixels' else env.observation_spec().maximum,
-                dtype=obs_dtype),
+                np.inf if modality != "pixels" else env.observation_spec().maximum,
+                dtype=obs_dtype,
+            ),
             shape=obs_shp,
             dtype=obs_dtype,
         )
@@ -206,7 +216,8 @@ class TimeStepToGymWrapper(object):
             low=np.full(act_shp, env.action_spec().minimum),
             high=np.full(act_shp, env.action_spec().maximum),
             shape=act_shp,
-            dtype=env.action_spec().dtype)
+            dtype=env.action_spec().dtype,
+        )
         self.env = env
         self.domain = domain
         self.task = task
@@ -227,7 +238,7 @@ class TimeStepToGymWrapper(object):
         return None
 
     def _obs_to_array(self, obs):
-        if self.modality != 'pixels':
+        if self.modality != "pixels":
             return np.concatenate([v.flatten() for v in obs.values()])
         return obs
 
@@ -238,11 +249,15 @@ class TimeStepToGymWrapper(object):
     def step(self, action):
         self.t += 1
         time_step = self.env.step(action)
-        info = {'is_success': self.env.is_success(), 'success': self.env.is_success()}
-        return self._obs_to_array(
-            time_step.observation), time_step.reward, time_step.last() or self.t == self.ep_len, info
+        info = {"is_success": self.env.is_success(), "success": self.env.is_success()}
+        return (
+            self._obs_to_array(time_step.observation),
+            time_step.reward,
+            time_step.last() or self.t == self.ep_len,
+            info,
+        )
 
-    def render(self, mode='rgb_array', width=384, height=384, camera_id=0):
+    def render(self, mode="rgb_array", width=384, height=384, camera_id=0):
         camera_id = dict(quadruped=2).get(self.domain, camera_id)
         return self.env.physics.render(height, width, camera_id)
 
@@ -258,6 +273,7 @@ class DefaultDictWrapper(gym.Wrapper):
 
 class LeggedEnvWrapper(object):
     """Wrapper for quadruped locomotion."""
+
     def __init__(self, env):
         assert env.num_envs == 1
         input_space = env.get_input_space()
@@ -272,8 +288,8 @@ class LeggedEnvWrapper(object):
             dtype=np.float32,
         )
         self.action_space = gym.spaces.Box(
-            low=np.full(act_shape, -1.),
-            high=np.full(act_shape, 1.),
+            low=np.full(act_shape, -1.0),
+            high=np.full(act_shape, 1.0),
             shape=act_shape,
             dtype=np.float32,
         )
@@ -294,10 +310,10 @@ class LeggedEnvWrapper(object):
         self.t += 1
         a = torch.from_numpy(action) if isinstance(action, np.ndarray) else action
         obs, reward, done, info = self.env.step(a * self.env.clip_actions)
-        done = info['fake_done']
+        done = info["fake_done"]
         return self._transform_obs(obs), reward[0], done[0], info
 
-    def render(self, mode='rgb_array', width=384, height=384, camera_id=0):
+    def render(self, mode="rgb_array", width=384, height=384, camera_id=0):
         return self.env.robot.log_render().cpu().numpy()
 
     def _transform_obs(self, obs_dict):
@@ -307,17 +323,20 @@ class LeggedEnvWrapper(object):
 def make_xarm_env(cfg):
     """Make an xArm environmente."""
     import simxarm
-    task = cfg.task[len("xarm_"):]
-    obs_mode = 'rgb' if cfg.modality == 'pixels' else cfg.modality
 
-    env = simxarm.make(task=task,
-                       obs_mode=obs_mode,
-                       image_size=cfg.get("img_size", 84),
-                       action_repeat=cfg.get("action_repeat", 1),
-                       frame_stack=cfg.get("frame_stack", 1),
-                       seed=cfg.seed)
+    task = cfg.task[len("xarm_") :]
+    obs_mode = "rgb" if cfg.modality == "pixels" else cfg.modality
+
+    env = simxarm.make(
+        task=task,
+        obs_mode=obs_mode,
+        image_size=cfg.get("img_size", 84),
+        action_repeat=cfg.get("action_repeat", 1),
+        frame_stack=cfg.get("frame_stack", 1),
+        seed=cfg.seed,
+    )
     # Convenience
-    if obs_mode == 'all':
+    if obs_mode == "all":
         cfg.obs_shape = {}
         for k in env.observation_space:
             cfg.obs_shape[k] = tuple(int(x) for x in env.observation_space[k].shape)
@@ -326,7 +345,7 @@ def make_xarm_env(cfg):
     cfg.action_shape = tuple(int(x) for x in env.action_space.shape)
     cfg.action_dim = env.action_space.shape[0]
 
-    for k in ['obs_shape', 'action_shape', 'action_dim']:
+    for k in ["obs_shape", "action_shape", "action_dim"]:
         print(k, getattr(cfg, k))
 
     return env
@@ -335,6 +354,7 @@ def make_xarm_env(cfg):
 def make_d4rl_env(cfg):
     """Make an environment from D4RL."""
     import d4rl
+
     env = gym.make(cfg.task)
     env = gym.wrappers.RescaleAction(env, -1, 1)
     env = gym.wrappers.ClipAction(env)
@@ -370,7 +390,7 @@ def make_legged_env(cfg):
         env_cfg["physics_engine"] = gymapi.SIM_PHYSX  # Default to PhysX
 
         sim_params = gymapi.SimParams()
-        sim_params.dt = 1. / 400.
+        sim_params.dt = 1.0 / 400.0
         sim_params.num_client_threads = env_cfg.get("slices", 0)
 
         sim_params.use_gpu_pipeline = True
@@ -413,7 +433,7 @@ def make_legged_env(cfg):
         surrounding=surrounding,
         cfg=env_cfg,
         robot_device=cfg["device"],
-        rl_device=rl_device
+        rl_device=rl_device,
     )
 
     env = LeggedEnvWrapper(env)
@@ -423,6 +443,152 @@ def make_legged_env(cfg):
     cfg.action_dim = env.action_space.shape[0]
 
     return env
+
+
+class GymToGymnasiumWrapper(gymnasium.Env):
+    def __init__(self, env: gym.Env):
+        super(GymToGymnasiumWrapper, self).__init__()
+        self.env = env
+        self.action_space = env.action_space
+        self.observation_space = env.observation_space
+
+    def reset(self, *, seed: int | None = None, options: dict | None = None):
+        if seed is not None:
+            self.env.seed(seed)
+        obs = self.env.reset()
+        info = {}
+        return obs, info
+
+    def step(self, action):
+        obs, reward, terminated, info = self.env.step(action)
+        truncated = False
+        return obs, reward, terminated, truncated, info
+
+    def close(self):
+        self.env.close()
+
+    def render(self, mode="rgb_array", **kwargs):
+        return self.env.render(mode, **kwargs)
+
+
+class HFGymnasiumSimXarmWrapper(gymnasium.Wrapper):
+    """
+    A wrapper for the SimXarm environments. This wrapper is used to
+    convert the action and observation spaces to the correct format.
+    """
+
+    def __init__(
+        self,
+        env,
+        # task,
+        obs_mode,
+        image_size,
+        action_repeat,
+        frame_stack=1,
+        channel_last=False,
+    ):
+        super().__init__(env)
+        self._env = env
+        self.obs_mode = obs_mode
+        self.image_size = image_size
+        self.action_repeat = action_repeat
+        self.frame_stack = frame_stack
+        self._frames = deque([], maxlen=frame_stack)
+        self.channel_last = channel_last
+        # self._max_episode_steps = task["episode_length"] // action_repeat
+        self._max_episode_steps = self.env.metadata["episode_length"] // action_repeat
+
+        image_shape = (
+            (image_size, image_size, 3 * frame_stack)
+            if channel_last
+            else (3 * frame_stack, image_size, image_size)
+        )
+        if obs_mode == "state":
+            self.observation_space = env.observation_space["observation"]
+        elif obs_mode == "rgb":
+            self.observation_space = gym.spaces.Box(
+                low=0, high=255, shape=image_shape, dtype=np.uint8
+            )
+        elif obs_mode == "all":
+            self.observation_space = gym.spaces.Dict(
+                state=gym.spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32
+                ),
+                rgb=gym.spaces.Box(low=0, high=255, shape=image_shape, dtype=np.uint8),
+            )
+        else:
+            raise ValueError(
+                f"Unknown obs_mode {obs_mode}. Must be one of [rgb, all, state]"
+            )
+        # self.action_space = gym.spaces.Box(
+        #     low=-1.0, high=1.0, shape=(len(task["action_space"]),)
+        # )
+
+        self.action_space = gym.spaces.Box(
+            low=-1.0, high=1.0, shape=(len(self.env.metadata["action_space"]),)
+        )
+        # self.action_padding = np.zeros(4 - len(task["action_space"]), dtype=np.float32)
+        self.action_padding = np.zeros(
+            4 - len(self.env.metadata["action_space"]), dtype=np.float32
+        )
+        # if "w" not in task["action_space"]:
+        if "w" not in self.env.metadata["action_space"]:
+            self.action_padding[-1] = 1.0
+
+    def _render_obs(self):
+        # obs = self.render(
+        #     mode="rgb_array",
+        # )
+        obs = self.env.get_obs()["pixels"]
+        if not self.channel_last:
+            obs = obs.transpose(2, 0, 1)
+        return obs.copy()
+
+    def _update_frames(self, reset=False):
+        pixels = self._render_obs()
+        self._frames.append(pixels)
+        if reset:
+            for _ in range(1, self.frame_stack):
+                self._frames.append(pixels)
+        assert len(self._frames) == self.frame_stack
+
+    def transform_obs(self, obs, reset=False):
+        if self.obs_mode == "state":
+            return obs["observation"]
+        elif self.obs_mode == "rgb":
+            self._update_frames(reset=reset)
+            rgb_obs = np.concatenate(
+                list(self._frames), axis=-1 if self.channel_last else 0
+            )
+            return rgb_obs
+        elif self.obs_mode == "all":
+            self._update_frames(reset=reset)
+            rgb_obs = np.concatenate(
+                list(self._frames), axis=-1 if self.channel_last else 0
+            )
+            return OrderedDict((("rgb", rgb_obs), ("state", self.robot_state)))
+        else:
+            raise ValueError(
+                f"Unknown obs_mode {self.obs_mode}. Must be one of [rgb, all, state]"
+            )
+
+    def reset(self):
+        return self.transform_obs(self._env.reset(), reset=True), {}
+
+    def step(self, action):
+        action = np.concatenate([action, self.action_padding])
+        reward = 0.0
+        for _ in range(self.action_repeat):
+            obs, r, terminated, trunctated, info = self._env.step(action)
+            reward += r
+        return self.transform_obs(obs), reward, terminated, trunctated, info
+
+    def render(self, **kwargs):
+        return self._env.render()
+
+    @property
+    def state(self):
+        return self._env.robot_state
 
 
 def make_env(cfg):
