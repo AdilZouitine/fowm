@@ -1,5 +1,5 @@
 from collections import deque, defaultdict, OrderedDict
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Optional, Tuple, Dict
 import dm_env
 import numpy as np
 import torch
@@ -446,29 +446,75 @@ def make_legged_env(cfg):
 
 
 class GymToGymnasiumWrapper(gymnasium.Env):
+    """
+    A wrapper to convert a gym environment to a gymnasium environment.
+
+    Args:
+        env (gym.Env): The gym environment to wrap.
+
+    Attributes:
+        env (gym.Env): The wrapped gym environment.
+        action_space (gym.Space): The action space of the wrapped environment.
+        observation_space (gym.Space): The observation space of the wrapped environment.
+    """
+
     def __init__(self, env: gym.Env):
         super(GymToGymnasiumWrapper, self).__init__()
         self.env = env
         self.action_space = env.action_space
         self.observation_space = env.observation_space
 
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
+    def reset(
+        self, *, seed: Optional[int] = None, options: Optional[dict] = None
+    ) -> Tuple[Any, Dict]:
+        """
+        Resets the environment and returns the initial observation and an empty info dictionary.
+
+        Args:
+            seed (Optional[int], optional): Seed for the environment's random number generator.
+            options (Optional[dict], optional): Additional options for the reset method.
+
+        Returns:
+            Tuple: Initial observation and an empty info dictionary.
+        """
         if seed is not None:
             self.env.seed(seed)
         obs = self.env.reset()
         info = {}
         return obs, info
 
-    def step(self, action):
+    def step(self, action: Any) -> Tuple[Any, float, bool, bool, Dict]:
+        """
+        Steps through the environment with the given action.
+
+        Args:
+            action (Any): The action to take.
+
+        Returns:
+            Tuple: Observation, reward, termination status, truncation status, and additional info.
+        """
         obs, reward, terminated, info = self.env.step(action)
         truncated = False
         return obs, reward, terminated, truncated, info
 
-    def close(self):
+    def close(self) -> None:
+        """
+        Closes the environment.
+        """
         self.env.close()
 
-    def render(self, mode="rgb_array", **kwargs):
-        return self.env.render(mode, **kwargs)
+    def render(self, mode: str = "rgb_array", **kwargs) -> Any:
+        """
+        Renders the environment.
+
+        Args:
+            mode (str, optional): The mode to render with.
+            **kwargs: Additional arguments for the render method.
+
+        Returns:
+            Any: Rendered output.
+        """
+        return self.env.render(mode=mode, **kwargs)
 
 
 class HFGymnasiumSimXarmWrapper(gymnasium.Wrapper):
@@ -486,6 +532,7 @@ class HFGymnasiumSimXarmWrapper(gymnasium.Wrapper):
         action_repeat,
         frame_stack=1,
         channel_last=False,
+        seed=None,
     ):
         super().__init__(env)
         self._env = env
@@ -497,6 +544,7 @@ class HFGymnasiumSimXarmWrapper(gymnasium.Wrapper):
         self.channel_last = channel_last
         # self._max_episode_steps = task["episode_length"] // action_repeat
         self._max_episode_steps = self.env.metadata["episode_length"] // action_repeat
+        self.seed = seed
 
         image_shape = (
             (image_size, image_size, 3 * frame_stack)
@@ -539,7 +587,8 @@ class HFGymnasiumSimXarmWrapper(gymnasium.Wrapper):
         # obs = self.render(
         #     mode="rgb_array",
         # )
-        obs = self.env.get_obs()["pixels"]
+        # obs = self.env.get_obs()["pixels"]
+        obs = self.env.get_wrapper_attr("get_obs")()["pixels"]
         if not self.channel_last:
             obs = obs.transpose(2, 0, 1)
         return obs.copy()
@@ -566,14 +615,16 @@ class HFGymnasiumSimXarmWrapper(gymnasium.Wrapper):
             rgb_obs = np.concatenate(
                 list(self._frames), axis=-1 if self.channel_last else 0
             )
-            return OrderedDict((("rgb", rgb_obs), ("state", self.robot_state)))
+            return OrderedDict(
+                (("rgb", rgb_obs), ("state", self.get_wrapper_attr("robot_state")))
+            )
         else:
             raise ValueError(
                 f"Unknown obs_mode {self.obs_mode}. Must be one of [rgb, all, state]"
             )
 
     def reset(self):
-        return self.transform_obs(self._env.reset(), reset=True), {}
+        return self.transform_obs(self._env.reset(seed=self.seed), reset=True), {}
 
     def step(self, action):
         action = np.concatenate([action, self.action_padding])
@@ -588,7 +639,7 @@ class HFGymnasiumSimXarmWrapper(gymnasium.Wrapper):
 
     @property
     def state(self):
-        return self._env.robot_state
+        return self._env.get_wrapper_attr("robot_state")
 
 
 def make_env(cfg):
@@ -602,3 +653,75 @@ def make_env(cfg):
     else:
         cfg.domain = "d4rl"
         return make_d4rl_env(cfg)
+
+
+def make_xarm_hugging_face_env(cfg):
+    """Make an xArm hugging face environment."""
+    from gym_xarm.tasks.lift import Lift
+    from gym_xarm.tasks.push import Push
+
+    tasks = {
+        "hfxarm_lift": Lift,
+        "hfxarm_push": Push,
+    }
+
+    obs_mapping = {
+        "state": "states",
+        "all": "pixels_agent_pos",
+        "rgb": "pixels",
+    }
+
+    task = cfg.task
+    obs_mode = "rgb" if cfg.modality == "pixels" else cfg.modality
+
+    env = tasks[task](obs_type=obs_mapping[obs_mode])
+    env = gymnasium.wrappers.TimeLimit(
+        env, max_episode_steps=cfg.get("max_episode_steps", 50)
+    )
+
+    env = HFGymnasiumSimXarmWrapper(
+        env=env,
+        obs_mode=obs_mode,
+        image_size=cfg.get("img_size", 84),
+        action_repeat=cfg.get("action_repeat", 1),
+        frame_stack=cfg.get("frame_stack", 1),
+        seed=cfg.seed,
+        channel_last=False,
+    )
+    # env = simxarm.make(
+    #     task=task,
+    #     obs_mode=obs_mode,
+    #     image_size=cfg.get("img_size", 84),
+    #     action_repeat=cfg.get("action_repeat", 1),
+    #     frame_stack=cfg.get("frame_stack", 1),
+    #     seed=cfg.seed,
+    # )
+    # Convenience
+    if obs_mode == "all":
+        cfg.obs_shape = {}
+        for k in env.observation_space:
+            cfg.obs_shape[k] = tuple(int(x) for x in env.observation_space[k].shape)
+    else:
+        cfg.obs_shape = tuple(int(x) for x in env.observation_space.shape)
+    cfg.action_shape = tuple(int(x) for x in env.action_space.shape)
+    cfg.action_dim = env.action_space.shape[0]
+
+    for k in ["obs_shape", "action_shape", "action_dim"]:
+        print(k, getattr(cfg, k))
+
+    return env
+
+
+def make_gymnasium_env(cfg):
+    """Make a task environment with cfg"""
+    if cfg.task.startswith("xarm"):
+        cfg.domain = "xarm"
+        return GymToGymnasiumWrapper(make_xarm_env(cfg))
+    if cfg.task.startswith("hfxarm"):
+        return make_xarm_hugging_face_env(cfg)
+    elif cfg.task.startswith("legged"):
+        cfg.domain = "legged"
+        return GymToGymnasiumWrapper(make_legged_env(cfg))
+    else:
+        cfg.domain = "d4rl"
+        return GymToGymnasiumWrapper(make_d4rl_env(cfg))
